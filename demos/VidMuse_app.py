@@ -179,6 +179,31 @@ def merge_audio_video(video_path, audio_path, output_path):
         return None
 
 
+def _do_predictions_for_get_video_emb(video, duration, progress=False, gradio_progress=None, **gen_kwargs):
+    
+    fps = 2
+    progress=True
+    USE_DIFFUSION=False
+
+    video_path = video[0]
+    duration = int(get_video_duration(video_path))
+    MODEL.set_generation_params(duration=duration, **gen_kwargs)
+
+    local_video_tensor, global_video_tensor = video_read_global(video_path, seek_time=0., duration=duration, target_fps=fps)
+
+    try:
+        outputs = MODEL.generate([local_video_tensor, global_video_tensor], progress=progress, return_tokens=USE_DIFFUSION, return_video_emb=True)
+
+    except RuntimeError as e:
+        raise 
+    # print("video emb outputs.size = ", outputs.size(), outputs)
+
+    # torch.save(outputs, "/root/autodl-tmp/VidMuse-main/{}.pt".format(Path(video_path).name))
+    
+    outputs = outputs.detach().cpu().float()
+    # print("video emb outputs.shape = ", outputs.shape)
+    return outputs
+    
 def _do_predictions(video, duration, progress=False, gradio_progress=None, **gen_kwargs):
     
     be = time.time()
@@ -202,35 +227,36 @@ def _do_predictions(video, duration, progress=False, gradio_progress=None, **gen
         raise gr.Error("Error while generating " + e.args[0])
 
     outputs = outputs.detach().cpu().float()
-    pending_videos = []
-    out_wavs = []
-    for output in outputs:
-        with NamedTemporaryFile("wb", suffix=".wav", delete=False) as file:
-            audio_write(
-                file.name, output, MODEL.sample_rate, strategy="loudness",
-                loudness_headroom_db=16, loudness_compressor=True, add_suffix=False)
+    print("outputs.shape = ", outputs.shape)
+    # pending_videos = []
+    # out_wavs = []
+    # for output in outputs:
+    #     with NamedTemporaryFile("wb", suffix=".wav", delete=False) as file:
+    #         audio_write(
+    #             file.name, output, MODEL.sample_rate, strategy="loudness",
+    #             loudness_headroom_db=16, loudness_compressor=True, add_suffix=False)
 
 
-            merged_video_path = f"./demo_result/merged_video_{os.path.basename(file.name)[:-4]}.mp4"
-            directory = os.path.dirname(merged_video_path)
-            if not os.path.exists(directory):
-                os.makedirs(directory)            
+    #         merged_video_path = f"./demo_result/merged_video_{os.path.basename(file.name)[:-4]}.mp4"
+    #         directory = os.path.dirname(merged_video_path)
+    #         if not os.path.exists(directory):
+    #             os.makedirs(directory)            
 
-            pending_videos.append(
-                pool.submit(merge_audio_video, video_path, file.name, merged_video_path)
-            )
+    #         pending_videos.append(
+    #             pool.submit(merge_audio_video, video_path, file.name, merged_video_path)
+    #         )
 
-            out_wavs.append(file.name)
-            file_cleaner.add(file.name)
+    #         out_wavs.append(file.name)
+    #         file_cleaner.add(file.name)
 
-    out_videos = [merged_video_path]
-    for video in out_videos:
-        file_cleaner.add(video)
-    print("batch finished", time.time() - be)
-    print("Tempfiles currently stored: ", len(file_cleaner.files))
+    # out_videos = [merged_video_path]
+    # for video in out_videos:
+    #     file_cleaner.add(video)
+    # print("batch finished", time.time() - be)
+    # print("Tempfiles currently stored: ", len(file_cleaner.files))
 
-    time.sleep(8)
-    return out_videos, out_wavs
+    # time.sleep(8)
+    # return out_videos, out_wavs
 
 
 

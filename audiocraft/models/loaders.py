@@ -72,15 +72,17 @@ def load_compression_model_ckpt(file_or_url_or_id: tp.Union[Path, str], cache_di
 
 
 def load_compression_model(file_or_url_or_id: tp.Union[Path, str], device='cpu', cache_dir: tp.Optional[str] = None):
-    pkg = load_compression_model_ckpt(file_or_url_or_id, cache_dir=cache_dir)
-    if 'pretrained' in pkg:
-        return CompressionModel.get_pretrained(pkg['pretrained'], device=device)
-    cfg = OmegaConf.create(pkg['xp.cfg'])
-    cfg.device = str(device)
-    model = builders.get_compression_model(cfg)
-    model.load_state_dict(pkg['best_state'])
-    model.eval()
-    return model
+    # pkg = load_compression_model_ckpt(file_or_url_or_id, cache_dir=cache_dir)
+    # if 'pretrained' in pkg:
+    #     return CompressionModel.get_pretrained(pkg['pretrained'], device=device)
+    # cfg = OmegaConf.create(pkg['xp.cfg'])
+    # cfg.device = str(device)
+    # model = builders.get_compression_model(cfg)
+    # model.load_state_dict(pkg['best_state'])
+    # model.eval()
+    # return model
+
+    return None
 
 
 def load_lm_model_ckpt(file_or_url_or_id: tp.Union[Path, str], cache_dir: tp.Optional[str] = None):

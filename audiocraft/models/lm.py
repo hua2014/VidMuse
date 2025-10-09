@@ -266,8 +266,8 @@ class LMModel(StreamingModule):
         self.__dict__['_fsdp'] = None
         
         if self.visual_encoder == 'clip':
-            self.visual_encoder_model = CLIPVisionModelWithProjection.from_pretrained("openai/clip-vit-base-patch32")
-            self.processor = AutoProcessor.from_pretrained("openai/clip-vit-base-patch32")
+            self.visual_encoder_model = CLIPVisionModelWithProjection.from_pretrained("/root/autodl-tmp/VidMuse-main/pretrained_model/openai_clip-vit-base-patch32")
+            self.processor = AutoProcessor.from_pretrained("/root/autodl-tmp/VidMuse-main/pretrained_model/openai_clip-vit-base-patch32")
                              
         else:
             print(f'the encoder now is:{self.visual_encoder}')
@@ -347,6 +347,9 @@ class LMModel(StreamingModule):
         local_image = local_video_tensor.to(dtype=torch.float32)
         global_image = global_video_tensor.to(dtype=torch.float32)
 
+        # print("\tlocal_image size = ", local_image.size())
+        # print("\tglobal_image size = ", global_image.size())
+
         local_batch_size, _, local_time_length, _, _ = local_image.size()
         local_image = einops.rearrange(local_image, 'b c t h w -> (b t) c h w')
 
@@ -356,11 +359,18 @@ class LMModel(StreamingModule):
         local_temporal_transformer = self.local_temporal_transformer
         global_temporal_transformer = self.global_temporal_transformer
 
+        # print("\tlocal_image size size= ", local_image.size())
+        # print("\tglobal_image size = ", global_image.size())
+
+
         local_video_inputs = self.processor(images=local_image.float(), return_tensors="pt")
         local_pixel_values = local_video_inputs['pixel_values'].to(device)
 
         global_video_inputs = self.processor(images=global_image.float(), return_tensors="pt")
         global_pixel_values = global_video_inputs['pixel_values'].to(device)
+
+        # print("\tlocal_pixel_values size= ", local_pixel_values.size())
+        # print("\tglobal_pixel_values size = ", global_pixel_values.size())
 
         if self.visual_encoder == 'clip':
             with torch.no_grad():
@@ -380,11 +390,15 @@ class LMModel(StreamingModule):
                 global_video_hidden, '(b t) q h -> b (t q) h',
                 b=global_batch_size, t=global_time_length
             )
-
+        # print("\tlocal_video_hidden size = ", local_video_hidden.size())
+        # print("\tglobal_video_hidden size = ", global_video_hidden.size())
         video_hidden = self.multi_head_cross_attention(local_video_hidden, global_video_hidden)
-        video_emb = self.visual_feature_proj(video_hidden)
 
-        return video_emb
+        # print("\tvideo_hidden size = ", video_hidden.size(), video_hidden)
+        video_emb = self.visual_feature_proj(video_hidden)
+        # print("\tvideo_emb size = ", video_emb.size())
+
+        return video_hidden, video_emb
 
 
     def forward(self, sequence: torch.Tensor,
@@ -518,7 +532,7 @@ class LMModel(StreamingModule):
             sequence = torch.cat([sequence, sequence], dim=0)
             
             if precomputed_video_emb is None:
-                video_emb = self.compute_video_emb([cfg_conditions_list[0], cfg_conditions_list[1]], device=sequence.device)
+                _, video_emb = self.compute_video_emb([cfg_conditions_list[0], cfg_conditions_list[1]], device=sequence.device)
             else:
                 video_emb = precomputed_video_emb
 
@@ -613,6 +627,8 @@ class LMModel(StreamingModule):
         global_null_conditions = ClassifierFreeGuidanceDropout(p=1.0)(global_conditions)
         global_cfg_conditions = torch.cat((global_conditions, global_null_conditions), dim=0)
 
+        print("local_conditions size =", local_conditions.size())
+        print("global_conditions size =", global_conditions.size())
         if prompt is None:
             assert num_samples > 0
             prompt = torch.zeros((num_samples, self.num_codebooks, 0), dtype=torch.long, device=device)
@@ -632,8 +648,9 @@ class LMModel(StreamingModule):
         start_offset_sequence = pattern.get_first_step_with_timesteps(start_offset)
         assert start_offset_sequence is not None
 
-        video_emb = self.compute_video_emb([local_cfg_conditions, global_cfg_conditions], device=device)
-
+        # _, video_emb = self.compute_video_emb([local_cfg_conditions, global_cfg_conditions], device=device)
+        _, video_emb = self.compute_video_emb([local_conditions, global_conditions], device=device)
+        # print("video_emb size = ", video_emb.size())
         with self.streaming():
             unconditional_state = self.get_streaming_state()
             prev_offset = 0
@@ -683,3 +700,46 @@ class LMModel(StreamingModule):
 
         assert (out_codes >= 0).all() and (out_codes <= self.card).all()
         return out_codes
+        
+    @torch.no_grad()
+    def generate_video_emb(self,
+                 prompt: tp.Optional[torch.Tensor] = None,
+                 conditions_list: tp.List = [],
+                 num_samples: tp.Optional[int] = None):
+        """Generate tokens sampling from the model given a prompt or unconditionally. 
+        """
+        assert not self.training, "generation shouldn't be used in training mode."
+        first_param = next(iter(self.parameters()))
+        device = first_param.device
+        assert isinstance(conditions_list, list)
+        
+        assert len(conditions_list) == 2
+        local_conditions = conditions_list[0]
+        global_conditions = conditions_list[1]
+        # Checking all input shapes are consistent.
+        possible_num_samples = []
+        if num_samples is not None:
+            possible_num_samples.append(num_samples)
+        elif prompt is not None:
+            possible_num_samples.append(prompt.shape[0])
+        elif local_conditions is not None:
+            possible_num_samples.append(len(local_conditions))
+        else:
+            possible_num_samples.append(1)
+            
+        assert [x == possible_num_samples[0] for x in possible_num_samples], "Inconsistent inputs shapes"
+        num_samples = possible_num_samples[0]
+
+        # local_cfg_conditions: CFGConditions
+        # global_cfg_conditions: CFGConditions
+        # local_null_conditions = ClassifierFreeGuidanceDropout(p=1.0)(local_conditions)
+        # local_cfg_conditions = torch.cat((local_conditions, local_null_conditions), dim=0)
+        # global_null_conditions = ClassifierFreeGuidanceDropout(p=1.0)(global_conditions)
+        # global_cfg_conditions = torch.cat((global_conditions, global_null_conditions), dim=0)
+        # print("\t local_cfg_conditions size = ", local_cfg_conditions.size(), local_conditions.size())
+        # print("\t global_cfg_conditions size = ", global_cfg_conditions.size(), global_conditions.size())
+        # video_hidden, video_emb = self.compute_video_emb([local_cfg_conditions, global_cfg_conditions], device=device)
+        video_hidden, video_emb = self.compute_video_emb([local_conditions, global_conditions], device=device)
+
+        # print("lm.py video_hidden size = ", video_hidden.size())
+        return video_hidden, video_emb

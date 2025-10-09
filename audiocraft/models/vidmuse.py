@@ -34,7 +34,7 @@ class VidMuse:
         self.lm = lm
         self.cfg: tp.Optional[omegaconf.DictConfig] = None
         # Just to be safe, let's put everything in eval mode.
-        self.compression_model.eval()
+        # self.compression_model.eval()
         self.lm.eval()
 
         if hasattr(lm, 'cfg'):
@@ -66,17 +66,17 @@ class VidMuse:
     @property
     def frame_rate(self) -> float:
         """Roughly the number of AR steps per seconds."""
-        return self.compression_model.frame_rate
+        return 50# self.compression_model.frame_rate
 
     @property
     def sample_rate(self) -> int:
         """Sample rate of the generated audio."""
-        return self.compression_model.sample_rate
+        return 32000# self.compression_model.sample_rate
 
     @property
     def audio_channels(self) -> int:
         """Audio channels of the generated audio."""
-        return self.compression_model.channels
+        return 1# self.compression_model.channels
 
     @staticmethod
     def get_pretrained(name: str = 'facebook/musicgen-melody', device=None):
@@ -167,7 +167,7 @@ class VidMuse:
             return self.generate_audio(tokens), tokens
         return self.generate_audio(tokens)
 
-    def generate(self, descriptions_list: tp.List, progress: bool = False, return_tokens: bool = False) \
+    def generate(self, descriptions_list: tp.List, progress: bool = False, return_tokens: bool = False, return_video_emb:bool=False) \
             -> tp.Union[torch.Tensor, tp.Tuple[torch.Tensor, torch.Tensor]]:
         """Generate samples conditioned on text.
 
@@ -191,11 +191,15 @@ class VidMuse:
         
 
         assert len(descriptions_list)==2
+        if return_video_emb:
+            video_emb = self._generate_video_embs([local_attributes, global_attributes])
+            return video_emb
         tokens = self._generate_tokens([local_attributes, global_attributes], prompt_tokens, progress)
-            
-        if return_tokens:
-            return self.generate_audio(tokens), tokens
-        return self.generate_audio(tokens)
+        return tokens
+                
+        # if return_tokens:
+        #     return self.generate_audio(tokens), tokens
+        # return self.generate_audio(tokens)
 
     def generate_with_chroma(self, descriptions: tp.List[torch.Tensor], melody_wavs: MelodyType,
                              melody_sample_rate: int, progress: bool = False,
@@ -413,3 +417,66 @@ class VidMuse:
         with torch.no_grad():
             gen_audio = self.compression_model.decode(gen_tokens, None)
         return gen_audio
+        
+    def _generate_video_embs(self, attributes: tp.List) -> torch.Tensor:
+        """Generate discrete audio tokens given audio prompt and/or conditions.
+        """
+        with self.autocast:
+            video_hidden, video_emb = self.lm.generate_video_emb(
+                None, attributes)
+
+        return video_hidden
+
+        # self.max_duration = 30
+        
+        # if self.duration <= self.max_duration:
+        #     # generate by sampling from LM, simple case.
+        #     with self.autocast:
+        #         video_hidden, video_emb = self.lm.generate_video_emb(
+        #             None, attributes)
+        #         print("vidmuse <30.py video_hidden size = ", video_hidden.size())
+        # else:
+        #     self.fps = 2
+        #     video_frame_rate = 50
+        #     # 要生成的视频特征数量
+        #     total_gen_len = int(self.duration * self.fps * video_frame_rate)
+        #     # 已生成的视频特征数量
+        #     current_gen_offset: int = 0
+            
+        #     # now this gets a bit messier, we need to handle prompts,
+        #     # melody conditioning etc.
+        #     all_tokens = []
+                                
+        #     # 如果还有要生成的特征
+        #     while current_gen_offset < total_gen_len:
+        #         # 已生成特征数 换算到 秒数
+        #         time_offset = current_gen_offset / video_frame_rate / self.fps
+        #         # 确定当前要处理的视频时间块
+        #         chunk_duration = min(self.duration - time_offset, self.max_duration) 
+
+        #         with self.autocast:
+        #             assert len(attributes)==2
+        #             video_hidden, video_emb = self.lm.generate_video_emb(
+        #                 None, [attributes[0][:,:,:int(chunk_duration*self.fps),:,:], attributes[1]])
+
+                
+        #         all_tokens.append(video_hidden)
+                
+        #         if attributes[0].shape[2]-int(chunk_duration*self.fps) < self.max_duration*self.fps:
+        #             # # 如果当前全部局部视频帧数 减去 本次处理时间块的帧数 小于 最大可处理时间块：表示下次迭代将是最后一次处理
+        #             # 直接取 最后 小于 max_duration的全部
+        #             attributes[0]=attributes[0][:,:,-self.max_duration*self.fps:,:,:]
+        #         else:
+        #             # 如果当前全部视频帧数 减去 本次处理时间块的帧数 大于等于 最大可处理时间块：：表示下次迭代仍以max_duration进行
+        #             # 重新定位 全部局部视频帧 的起始位置
+        #             attributes[0]=attributes[0][:,:,int(chunk_duration*self.fps):,:,:]
+                
+        #         # 我们本次计算得到的视频特征数 与 参数计算的时间块之间的换算关系
+        #         assert video_hidden.shape[1] == int(chunk_duration*self.fps * video_frame_rate)
+        #         # 更新 已生成的视频特征数量
+        #         current_gen_offset += video_hidden.shape[1]
+
+        #     video_hidden = torch.cat(all_tokens, dim=1)
+        # # 1 ，T x fps x FrameRate，768
+        # # 1， T x fps x FrameRate x N，768
+        return video_hidden
